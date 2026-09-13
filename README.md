@@ -4,6 +4,9 @@ Minimal, self-contained reproduction of a Quarkus Arc CDI regression involving `
 and a bean whose base class **self-invokes** an interface method that is part of the decorated
 type.
 
+> **Upstream issue:** [quarkusio/quarkus#56608](https://github.com/quarkusio/quarkus/issues/56608)
+> — this repository is the reference reproducer for it.
+
 - **Environment:** Java 25, Maven.
 - **Regression range (measured):** last good **3.34.7**, first bad **3.35.0**, still broken in
   **3.39.3** (latest 3.39). See [Version matrix](#version-matrix).
