@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 #
-# Runs LoggingDecoratorTest (org.acme) against every stable Quarkus release in the
-# regression range and appends the classified result to results/version-matrix.txt.
+# Runs LoggingDecoratorTest (face (a)) for both package variants -- org.acme and
+# org.example -- against every stable Quarkus release in the regression range and
+# writes a markdown data table to results/version-matrix.md.
+#
+# The two packages are the opposite sides of the known package-sensitivity flip:
+# org.acme is in the "good on 3.34.7, bad on 3.35.0+" group, org.example is in the
+# "bad on 3.34.7, good on 3.39.3" group. Running both per version makes the flip
+# visible in a single table.
 #
 # Usage:
-#   ./run-matrix.sh                  # default range, appends to results/version-matrix.txt
+#   ./run-matrix.sh                  # default range, overwrites results/version-matrix.md
 #   ./run-matrix.sh 3.35.0 3.39.3    # explicit range (inclusive)
 #
-# Classification:
+# Classification (per package):
 #   PASS              test exits 0
 #   FAIL-StackOverflow test fails and the log contains StackOverflowError
 #   FAIL-other        any other failure
@@ -17,9 +23,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-OUT_FILE="results/version-matrix.txt"
-TEST_CLASS="LoggingDecoratorTest"
+OUT_FILE="results/version-matrix.md"
 LOG_DIR="$(mktemp -d)"
+
+PACKAGES=(
+  org.acme
+  org.example
+)
+TEST_CLASS="LoggingDecoratorTest"
 
 ALL_VERSIONS=(
   3.33.0 3.33.1 3.33.2 3.33.3
@@ -46,25 +57,46 @@ else
   exit 2
 fi
 
+# classify_result <log-file> <exit-code> -> PASS | FAIL-StackOverflow | FAIL-other
+classify_result() {
+  local log="$1" code="$2"
+  if [[ "$code" -eq 0 ]]; then
+    echo "PASS"
+  elif grep -q "StackOverflowError" "$log"; then
+    echo "FAIL-StackOverflow"
+  else
+    echo "FAIL-other"
+  fi
+}
+
 mkdir -p "$(dirname "$OUT_FILE")"
-: > "$OUT_FILE"
+
+HEADER="| Quarkus Version"
+SEPARATOR="| ---"
+for PKG in "${PACKAGES[@]}"; do
+  HEADER="$HEADER | $PKG"
+  SEPARATOR="$SEPARATOR | ---"
+done
+HEADER="$HEADER |"
+SEPARATOR="$SEPARATOR |"
+
+{
+  printf '%s\n' "$HEADER"
+  printf '%s\n' "$SEPARATOR"
+} > "$OUT_FILE"
 
 for V in "${VERSIONS[@]}"; do
-  LOG="$LOG_DIR/$V.log"
-  mvn clean -Dquarkus.platform.version="$V" -Dtest="$TEST_CLASS" test >"$LOG" 2>&1
-  CODE=$?
-  SO=$(grep -c "StackOverflowError" "$LOG")
-  UOE=$(grep -c "UnsupportedOperationException" "$LOG")
-
-  if [[ $CODE -eq 0 ]]; then
-    R="PASS"
-  elif [[ $SO -gt 0 ]]; then
-    R="FAIL-StackOverflow"
-  else
-    R="FAIL-other"
-  fi
-
-  printf '%s %s (exit=%s so=%s uoe=%s)\n' "$V" "$R" "$CODE" "$SO" "$UOE" | tee -a "$OUT_FILE"
+  ROW="| $V "
+  for PKG in "${PACKAGES[@]}"; do
+    LOG="$LOG_DIR/$V-$PKG.log"
+    mvn clean -Dquarkus.platform.version="$V" -Dtest="$PKG.$TEST_CLASS" test >"$LOG" 2>&1
+    CODE=$?
+    R="$(classify_result "$LOG" "$CODE")"
+    ROW="$ROW| $R "
+    printf '%s %s %s (exit=%s)\n' "$V" "$PKG" "$R" "$CODE"
+  done
+  ROW="$ROW|"
+  printf '%s\n' "$ROW" >> "$OUT_FILE"
 done
 
 echo

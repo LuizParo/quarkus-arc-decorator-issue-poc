@@ -7,7 +7,8 @@ made from inside the bean must not be decorated. Here the self-invocation is rou
 decorator instead of reaching the concrete override, so the real handler logic is unreachable through
 the normal entry point.
 
-Reproducer project: https://github.com/LuizParo/quarkus-arc-decorator-issue-poc (package `org.acme`, Java 25).
+Reproducer project: https://github.com/LuizParo/quarkus-arc-decorator-issue-poc (packages `org.acme`
+and `org.example`, Java 25).
 
 Regression range: worked through **3.34.7**, first broken in **3.35.0**, still broken in **3.39.3**.
 
@@ -113,23 +114,26 @@ Self-contained Maven project, Java 25. Dependencies are only `quarkus-arc` plus 
 code beyond the classes above. Clone it and run the commands below.
 
 ```bash
-# Regression version — fails with StackOverflowError
-mvn clean -Dquarkus.platform.version=3.39.3 -Dtest='LoggingDecoratorTest' test
+# Regression version — org.acme fails with StackOverflowError
+mvn clean -Dquarkus.platform.version=3.39.3 -Dtest='org.acme.LoggingDecoratorTest' test
 
-# Last known-good version — passes
-mvn clean -Dquarkus.platform.version=3.34.7 -Dtest='LoggingDecoratorTest' test
+# Last known-good version for org.acme — passes
+mvn clean -Dquarkus.platform.version=3.34.7 -Dtest='org.acme.LoggingDecoratorTest' test
 
-# Both faces
-mvn clean -Dquarkus.platform.version=3.39.3 -Dtest='LoggingDecoratorTest,PassThroughDecoratorTest' test
+# Both faces, both packages
+mvn clean -Dquarkus.platform.version=3.39.3 -Dtest='org.acme.*Test,org.example.*Test' test
 ```
 
 Steps:
 1. Clone the reproducer repository.
-2. Run `mvn clean -Dquarkus.platform.version=3.39.3 -Dtest='LoggingDecoratorTest' test` → fails with `StackOverflowError`.
+2. Run `mvn clean -Dquarkus.platform.version=3.39.3 -Dtest='org.acme.LoggingDecoratorTest' test` → fails with `StackOverflowError`.
 3. Run the same with `-Dquarkus.platform.version=3.34.7` → passes.
+4. Run `-Dtest='org.example.LoggingDecoratorTest'` on the same versions → the result is flipped
+   (passes on 3.39.3, fails with `StackOverflowError` on 3.34.7).
 
-Two tests are included: `LoggingDecoratorTest` (face a) and `PassThroughDecoratorTest` (face b).
-Each runs in its own `QuarkusUnitTest` archive so the two decorators do not interfere.
+Each package (`org.acme` and `org.example`) contains both `LoggingDecoratorTest` (face a) and
+`PassThroughDecoratorTest` (face b). Each test runs in its own `QuarkusUnitTest` archive so the two
+decorators do not interfere.
 
 ## Environment
 
@@ -142,16 +146,17 @@ Each runs in its own `QuarkusUnitTest` archive so the two decorators do not inte
 
 ### Regression range
 
-Tested with `LoggingDecoratorTest` across every stable Quarkus release in the range:
+Tested with `LoggingDecoratorTest` across every stable Quarkus release in the range. Because the
+outcome depends on the package name (see below), both variants are reported side by side:
 
-| Quarkus | Result |
-|---|---|
-| 3.33.0 – 3.33.3 | pass |
-| 3.34.0 – 3.34.7 | pass |
-| **3.35.0** | **fail — StackOverflowError (first bad)** |
-| 3.35.0 – 3.39.3 | fail (all releases tested) |
+| Quarkus | org.acme | org.example |
+|---|---|---|
+| 3.33.0 – 3.33.3 | pass | fail — StackOverflowError |
+| 3.34.0 – 3.34.7 | pass | fail — StackOverflowError |
+| **3.35.0** | **fail — StackOverflowError (first bad)** | pass |
+| 3.35.1 – 3.39.3 | fail | pass |
 
-Last known good: **3.34.7**. First bad: **3.35.0**.
+Last known good for `org.acme`: **3.34.7**. First bad for `org.acme`: **3.35.0**.
 
 ### The reproducer's outcome depends on the package name
 
@@ -167,10 +172,20 @@ same Quarkus version. The result is deterministic across repeated runs for a giv
 | `decorator` | StackOverflow | pass |
 | `com.example.arcdecorator` | StackOverflow | pass |
 
-The reproducer uses `org.acme`. This naming sensitivity suggests the defect is related to how Arc
-selects or orders the generated implementation classes/methods (possibly tied to the ArC
-reproducibility changes around 3.35). I am flagging it because it may point directly at the cause,
-and any fix should be validated with more than one package name.
+The reproducer originally used `org.acme`. To make the flip directly observable (and to remove any
+dependence on a lucky package name), the whole reproducer is now **duplicated under `org.example`**,
+the opposite side of the flip. The two packages disagree on the same Quarkus version:
+
+| Build | `org.acme` (face a) | `org.example` (face a) |
+|---|---|---|
+| 3.34.7 | pass | StackOverflow |
+| 3.39.3 | StackOverflow | pass |
+
+So one project contains both a failing and a passing package on either side of the regression
+window. This naming sensitivity suggests the defect is related to how Arc selects or orders the
+generated implementation classes/methods (possibly tied to the ArC reproducibility changes around
+3.35). I am flagging it because it may point directly at the cause, and any fix should be validated
+with more than one package name.
 
 ### Notes
 
